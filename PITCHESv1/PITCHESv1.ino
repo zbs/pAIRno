@@ -66,7 +66,9 @@ int dataPin = 9;
 int clockPin = 10;
 WS2801 strip = WS2801(8, dataPin, clockPin);
 const int LED_LOCATION[]={4, 5, 6};
-const int LED_COLOR[]={65280, 000255000, 000000255};
+//long is 32 bit variablie 
+//color equation= 65536 * r + 256 * g+ b
+const long LED_COLOR[]={16711680, 65280, 255};
 
 void setup() {
 	Serial.begin(57600);
@@ -131,8 +133,7 @@ void loop() {
                                 else{
                                   noteOn(0, SENSOR_NOTES_HIGH_PITCH[i], 60);
                                 }
-                                strip.setPixelColor(LED_LOCATION[i], LED_COLOR[i]);
-				strip.show();
+                                strip.setPixelColor(LED_LOCATION[i], LED_COLOR[i]);				strip.show();
 				delay(50);
 				isSensorOn[i] = true;
 			}
