@@ -56,16 +56,17 @@ const int SENSOR_NOTES_MED_PITCH[]= {72, 74, 67};
 //Two Octaves up
 const int SENSOR_NOTES_HIGH_PITCH[]= {84, 86, 88};
 const int PIANO_NUMBER = 0;
-const int MAX_READ_DISTANCE = 17;
-const int PITCH_TWO_MAX_DISTANCE=17;
-const int PITCH_ONE_MAX_DISTANCE=12;
+const int MAX_READ_DISTANCE = 20;
+const int PITCH_TWO_MAX_DISTANCE=15;
+const int PITCH_ONE_MAX_DISTANCE=10;
 boolean PITCH_ONE_ON=false;
 boolean PITCH_TWO_ON=false;
 //for lights
+//green is data blue is clock
 int dataPin = 9;
 int clockPin = 10;
 WS2801 strip = WS2801(8, dataPin, clockPin);
-const int LED_LOCATION[]={4, 5, 6};
+const int LED_LOCATION[]={3, 4, 5};
 //long is 32 bit variablie 
 //color equation= 65536 * r + 256 * g+ b
 const long LED_COLOR_LOW_PITCH[]={16711680, 65280, 255};
@@ -123,6 +124,13 @@ void loop() {
 	talkMIDI(0xC0, PIANO_NUMBER, 0); //Set instrument number. 0xC0 is a 1 data byte command
 
 	for (int i = 0; i < sizeof(SENSOR_PINS) / sizeof(int); i++) {
+              if(i==2){
+              Serial.print("Analog: ");  
+              Serial.println(analogRead(SENSOR_PINS[i]));
+              Serial.print("Library: ");
+              Serial.println(sensors[i].getDistanceCentimeter());
+              delay(50);
+              }
                 if (inPitchThreeRange(sensors[i])){
 			if (!isSensorOn[i]) {
                                 if(inPitchOneRange(sensors[i])){
