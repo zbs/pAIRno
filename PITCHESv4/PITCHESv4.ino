@@ -54,7 +54,7 @@ const int SENSOR_NOTES[] = {48, 50, 52};
 // Middle C, D, and E
 const int SENSOR_NOTES_MED_PITCH[]= {60, 62, 64};
 //One Octaves up
-const int SENSOR_NOTES_HIGH_PITCH[]= 72, 74, 76};
+const int SENSOR_NOTES_HIGH_PITCH[]= {72, 74, 76};
 const int PIANO_NUMBER = 0;
 //for back notes
 const int MAX_READ_DISTANCE[] = {10, 15, 20};
@@ -151,7 +151,7 @@ void newOn(int i){
                       strip.setPixelColor(LED_LOCATION[i], 0, 0, 0);
                       break;
                     case 0:
-                      playLowKey(i)
+                      playLowKey(i);
                       break;
                     case 1:
                       playMiddleKey(i);
