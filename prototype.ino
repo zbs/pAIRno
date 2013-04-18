@@ -1,60 +1,63 @@
-/*
-2-12-2011
-Spark Fun Electronics 2011
-Nathan Seidle
-Updated to Arduino 1.01 by Marc "Trench" Tschudin
-
-This code is public domain but you buy me a beer if you use this and we meet someday (Beerware license).
-
-This code works with the VS1053 Breakout Board and controls the VS1053 in what is called Real Time MIDI mode. 
-To get the VS1053 into RT MIDI mode, power up the VS1053 breakout board with GPIO0 tied low, GPIO1 tied high.
-
-I use the NewSoftSerial library to send out the MIDI serial at 31250bps. This allows me to print regular messages
-for debugging to the terminal window. This helped me out a ton.
-
-5V : VS1053 VCC
-GND : VS1053 GND
-D3 (SoftSerial TX) : VS1053 RX
-D4 : VS1053 RESET
-
-Attach a headphone breakout board to the VS1053:
-VS1053 LEFT : TSH
-VS1053 RIGHT : RSH
-VS1053 GBUF : GND
-
-When in the drum bank (0x78), there are not different instruments, only different notes.
-To play the different sounds, select an instrument # like 5, then play notes 27 to 87.
-
-To play "Sticks" (31):
-talkMIDI(0xB0, 0, 0x78); //Bank select: drums
-talkMIDI(0xC0, 5, 0); //Set instrument number
-//Play note on channel 1 (0x90), some note value (note), middle velocity (60):
-noteOn(0, 31, 60);
-
-*/
-
 #include <SoftwareSerial.h>
 #include <DistanceGP2Y0A21YK.h>
+#include <QueueList.h>
+
+enum NoteMode {
+	TURN_ON,
+	TURN_OFF
+};
+struct NoteInstance {
+	int note;
+	int time;
+	NoteMode mode;
+};
 
 SoftwareSerial mySerial(2, 3); // RX, TX
 
 byte note = 0; //The MIDI note value to be played
 byte resetMIDI = 4; //Tied to VS1053 Reset line
 byte ledPin = 13; //MIDI traffic inidicator
-int  instrument = 0;
+const int  instrument = 0;
 
-const int SENSOR_PINS[] = {A0, A1, A2};
+
+const int SENSOR_PINS[] = {A0, A2};
 DistanceGP2Y0A21YK sensors[sizeof(SENSOR_PINS)/sizeof(int)];
 
 boolean isSensorOn[] = {false, false, false};
+
 // Middle C, D, and E
 const int SENSOR_NOTES[] = {60, 62, 64};
 const int PIANO_NUMBER = 0;
-const int MAX_READ_DISTANCE = 20;
+const int MAX_READ_DISTANCE = 18;
+const int MIN_READ_DISTANCE = 5;
+
+QueueList<NoteInstance> noteLoop;
+QueueList<NoteInstance> bufferLoop;
+unsigned long recordTimeCounter;
+
+int noteIndex = 0;
+
+enum ProcessMode {
+	ACTIVE,
+	INACTIVE
+};
+
+ProcessMode recordPedalMode = INACTIVE;
+ProcessMode loopPedalMode = INACTIVE;
+
+unsigned long currentTimeCounter = 0;
+
+const int NUM_PEDALS = 1;
+const int RECORD_PEDAL_PIN = 10;
+int recordPedalLastState = LOW;
+int recordPedalState = LOW;
+  // the current reading from the input pin
+
+long recordLastDebounceTime = 0;  // the last time the output pin was toggled	
+long DEBOUNCE_DELAY = 50;
 
 void setup() {
-	Serial.begin(57600);
-
+	Serial.begin(9600);
 	for (int i = 0; i < sizeof(SENSOR_NOTES) / sizeof(int); i++) {
 		sensors[i].begin(SENSOR_PINS[i]);
 	}
@@ -69,31 +72,163 @@ void setup() {
 	digitalWrite(resetMIDI, HIGH);
 	delay(100);
 	talkMIDI(0xB0, 0x07, 120); //0xB0 is channel message, set channel volume to near max (127)
+	//Set everything up for channel 1
+	talkMIDI(0xB1, 0x07, 120); //0xB0 is channel message, set channel volume to near max (127)
+
+	//Set up pedals
+	pinMode(RECORD_PEDAL_PIN, INPUT);
 }
 
 boolean inRange(DistanceGP2Y0A21YK sensor){
-	if (sensor.getDistanceCentimeter() < MAX_READ_DISTANCE) {
+	int distance = sensor.getDistanceCentimeter();
+	if ( distance < MAX_READ_DISTANCE && distance > MIN_READ_DISTANCE) {
 		return true;
 	}
 	return false;
 }
+
+void clearNoteLoop(){
+	while (!noteLoop.isEmpty()) {
+		noteLoop.pop();
+	}
+}
+
+void checkRecordingPedal() {
+	int reading = digitalRead(RECORD_PEDAL_PIN);
+
+	if (reading != recordPedalLastState) {
+		recordLastDebounceTime = millis();
+	} 
+
+	if ((millis() - recordLastDebounceTime) > DEBOUNCE_DELAY) {
+		if (recordPedalState != reading && recordPedalMode == INACTIVE) {
+			Serial.println("Start recording");
+			recordTimeCounter = millis();
+			loopPedalMode = INACTIVE;
+			recordPedalMode = ACTIVE;
+			clearNoteLoop();
+		}
+		else if (recordPedalState != reading && recordPedalMode == ACTIVE){
+			Serial.println("Stop recording");
+			recordPedalMode = INACTIVE;
+			
+			// Playback code
+			loopPedalMode = ACTIVE;
+			currentTimeCounter = 0;
+			noteIndex = 0;
+			//printQueue();
+		}
+		recordPedalState = reading;
+	}
+	recordPedalLastState = reading;
+}
+
+void checkPlaybackPedal() {
+	//int reading = digitalRead(playback_PEDAL_PIN);
+
+	//if (reading != playbackPedalLastState) {
+	//	playbackLastDebounceTime = millis();
+	//} 
+
+	//if ((millis() - playbackLastDebounceTime) > DEBOUNCE_DELAY) {
+	//	if (playbackPedalState != reading && playbackPedalMode == INACTIVE) {
+	//		currentTimeCounter = 0;
+	//		playbackPedalMode = ACTIVE;
+			//noteIndex = 0 ;
+	//		clearNoteLoop();
+	//	}
+	//	else if (playbackPedalState != reading && playbackPedalMode == ACTIVE){
+	//		playbackPedalMode = INACTIVE;
+	//	}
+	//	playbackPedalState = reading;
+	//}
+	//playbackPedalLastState = reading;
+}
+
+void printQueue(){
+	while (!noteLoop.isEmpty()) {
+		Serial.println(noteLoop.pop().time);
+	}
+}
+
 void loop() {
 	talkMIDI(0xB0, 0, 0x00);
 	talkMIDI(0xC0, PIANO_NUMBER, 0); //Set instrument number. 0xC0 is a 1 data byte command
 
+	// Do the same for channel 1
+	talkMIDI(0xB1, 0, 0x00);
+	talkMIDI(0xC1, PIANO_NUMBER, 0); //Set instrument number. 0xC0 is a 1 data byte command
+
+	checkRecordingPedal();
+	//checkLoopingPedal();
+
+	/*if (isPlayingActivated()) {
+		isPlayingLoop = true;
+		currentTimeCounter = 0;
+		noteIndex = 0;
+	}
+
+	if (isPlayingStopped()) {
+		isPlayingLoop = false;
+	}*/
+	if (loopPedalMode == ACTIVE) {
+		//Serial.println("LOOP ACTIVE");
+		//Serial.println(currentTimeCounter);
+		if (!noteLoop.isEmpty() && 100* (noteLoop.peek().time / 100) == currentTimeCounter) {
+			noteIndex++;
+			Serial.print("NOTE HIT:");
+			if (noteIndex % noteLoop.count() == 0) {
+				Serial.println("RESTART POINT");
+				currentTimeCounter = 0;
+			}
+
+			NoteInstance note = noteLoop.pop();
+			noteLoop.push(note);
+			
+			
+			
+			Serial.print(note.note);
+			Serial.print(" : ");
+			Serial.println(note.mode);
+			if (note.mode == TURN_ON) {
+				Serial.println("TURN NOTE ON");
+				noteOn(1, note.note, 60);
+				delay(50);
+			}
+			else {
+				
+				Serial.println("TURN NOTE OFF");
+				noteOff(1, note.note, 60);
+				delay(50);
+			}
+		}
+		currentTimeCounter+= 100;
+	}
+
 	for (int i = 0; i < sizeof(SENSOR_PINS) / sizeof(int); i++) {
 		if (inRange(sensors[i])){
 			if (!isSensorOn[i]) {
+				Serial.println("Sensor on");
 				noteOn(0, SENSOR_NOTES[i], 60);
-				delay(50);
 				isSensorOn[i] = true;
+
+				if (recordPedalMode == ACTIVE) {
+					NoteInstance noteInstance = {SENSOR_NOTES[i], millis() - recordTimeCounter, TURN_ON};
+					noteLoop.push(noteInstance);
+				}
+				Serial.println(noteLoop.count());
 			}
 		}
 		else {
 			if (isSensorOn[i]) {
+				Serial.println("Sensor off");
 				noteOff(0, SENSOR_NOTES[i], 60);
-				delay(50);
 				isSensorOn[i] = false;
+
+				if (recordPedalMode == ACTIVE) {
+					NoteInstance noteInstance = {SENSOR_NOTES[i], millis() - recordTimeCounter, TURN_OFF};
+					noteLoop.push(noteInstance);
+				}
 			}
 		}
 	}
