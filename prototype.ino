@@ -1,3 +1,10 @@
+/*TODO:
+- Make rocker switch work -- i.e. reset circuit when user turns off and on
+- Incorporate instrument into noteinstance so that you can play different instruments across a recording
+
+*/
+
+
 #include <SoftwareSerial.h>
 #include <DistanceGP2Y0A21YK.h>
 #include <QueueList.h>
@@ -17,8 +24,6 @@ SoftwareSerial mySerial(2, 3); // RX, TX
 byte note = 0; //The MIDI note value to be played
 byte resetMIDI = 4; //Tied to VS1053 Reset line
 byte ledPin = 13; //MIDI traffic inidicator
-const int  instrument = 0;
-
 
 const int SENSOR_PINS[] = {A0, A2};
 DistanceGP2Y0A21YK sensors[sizeof(SENSOR_PINS)/sizeof(int)];
@@ -27,7 +32,8 @@ boolean isSensorOn[] = {false, false, false};
 
 // Middle C, D, and E
 const int SENSOR_NOTES[] = {60, 62, 64};
-const int PIANO_NUMBER = 0;
+
+
 const int MAX_READ_DISTANCE = 18;
 const int MIN_READ_DISTANCE = 5;
 
@@ -42,19 +48,38 @@ enum ProcessMode {
 	INACTIVE
 };
 
+enum Instrument {
+	GRAND_PIANO = 0,
+	TENOR_SAX = 66,
+	HARPSICHORD = 6,
+	BANJO = 105
+};
+
+const int FOURWAY_SWITCH_PINS[] = {42, 43, 44, 45};
+const Instrument FOURWAY_SWITCH_INTSTRUMENTS[] = {GRAND_PIANO, TENOR_SAX, HARPSICHORD, BANJO};
+
+Instrument currentInstrument = GRAND_PIANO;
 ProcessMode recordPedalMode = INACTIVE;
+ProcessMode playButtonMode = INACTIVE;
 ProcessMode loopPedalMode = INACTIVE;
 
 unsigned long currentTimeCounter = 0;
 
 const int NUM_PEDALS = 1;
-const int RECORD_PEDAL_PIN = 10;
-int recordPedalLastState = LOW;
-int recordPedalState = LOW;
-  // the current reading from the input pin
+// the current reading from the input pin
 
-long recordLastDebounceTime = 0;  // the last time the output pin was toggled	
 long DEBOUNCE_DELAY = 50;
+
+struct Button {
+	const int pin;
+	int state;
+	int lastState;
+	long lastDebounceTime;
+};
+
+Button recordPedal = {53, LOW, LOW, 0};
+Button playButton = {52, LOW, LOW, 0};
+bool playToggle = false;
 
 void setup() {
 	Serial.begin(9600);
@@ -76,7 +101,7 @@ void setup() {
 	talkMIDI(0xB1, 0x07, 120); //0xB0 is channel message, set channel volume to near max (127)
 
 	//Set up pedals
-	pinMode(RECORD_PEDAL_PIN, INPUT);
+	pinMode(recordPedal.pin, INPUT);
 }
 
 boolean inRange(DistanceGP2Y0A21YK sensor){
@@ -94,56 +119,64 @@ void clearNoteLoop(){
 }
 
 void checkRecordingPedal() {
-	int reading = digitalRead(RECORD_PEDAL_PIN);
+	int reading = digitalRead(recordPedal.pin);
 
-	if (reading != recordPedalLastState) {
-		recordLastDebounceTime = millis();
+	if (reading != recordPedal.lastState) {
+		recordPedal.lastDebounceTime = millis();
 	} 
 
-	if ((millis() - recordLastDebounceTime) > DEBOUNCE_DELAY) {
-		if (recordPedalState != reading && recordPedalMode == INACTIVE) {
+	if ((millis() - recordPedal.lastDebounceTime) > DEBOUNCE_DELAY) {
+		if (recordPedal.state != reading && recordPedalMode == INACTIVE) {
 			Serial.println("Start recording");
 			recordTimeCounter = millis();
 			loopPedalMode = INACTIVE;
 			recordPedalMode = ACTIVE;
 			clearNoteLoop();
 		}
-		else if (recordPedalState != reading && recordPedalMode == ACTIVE){
+		else if (recordPedal.state != reading && recordPedalMode == ACTIVE){
 			Serial.println("Stop recording");
 			recordPedalMode = INACTIVE;
-			
+
 			// Playback code
-			loopPedalMode = ACTIVE;
-			currentTimeCounter = 0;
-			noteIndex = 0;
+
 			//printQueue();
 		}
-		recordPedalState = reading;
+		recordPedal.state = reading;
 	}
-	recordPedalLastState = reading;
+	recordPedal.lastState = reading;
 }
 
-void checkPlaybackPedal() {
-	//int reading = digitalRead(playback_PEDAL_PIN);
+void checkPlayButton() {
+	int reading = digitalRead(playButton.pin);
 
-	//if (reading != playbackPedalLastState) {
-	//	playbackLastDebounceTime = millis();
-	//} 
+	if (reading != playButton.lastState) {
+		playButton.lastDebounceTime = millis();
+	} 
 
-	//if ((millis() - playbackLastDebounceTime) > DEBOUNCE_DELAY) {
-	//	if (playbackPedalState != reading && playbackPedalMode == INACTIVE) {
-	//		currentTimeCounter = 0;
-	//		playbackPedalMode = ACTIVE;
-			//noteIndex = 0 ;
-	//		clearNoteLoop();
-	//	}
-	//	else if (playbackPedalState != reading && playbackPedalMode == ACTIVE){
-	//		playbackPedalMode = INACTIVE;
-	//	}
-	//	playbackPedalState = reading;
-	//}
-	//playbackPedalLastState = reading;
+	if ((millis() - playButton.lastDebounceTime) > DEBOUNCE_DELAY) {
+		if (playButton.state != reading && playButtonMode == INACTIVE) {
+			playButtonMode = ACTIVE;
+		}
+		else if (playButton.state != reading && playButtonMode == ACTIVE){
+			playButtonMode = INACTIVE;
+			playToggle = !playToggle;
+
+			if (playToggle) {
+				Serial.println("Playback started");
+				loopPedalMode = ACTIVE;
+				currentTimeCounter = 0;
+				noteIndex = 0;
+			}
+			else {
+				loopPedalMode = INACTIVE;
+				Serial.println("Playback stopped");
+			}
+		}
+		playButton.state = reading;
+	}
+	playButton.lastState = reading;
 }
+
 
 void printQueue(){
 	while (!noteLoop.isEmpty()) {
@@ -151,29 +184,30 @@ void printQueue(){
 	}
 }
 
+void checkFourWaySwitch(){
+	for (int i = 0; i < sizeof(FOURWAY_SWITCH_PINS)/sizeof(int); i++) {
+		if (digitalRead(FOURWAY_SWITCH_PINS[i]) == HIGH) {
+			currentInstrument = FOURWAY_SWITCH_INTSTRUMENTS[i];
+			return;
+		}
+	}
+}
+
 void loop() {
+	checkFourWaySwitch();
+
 	talkMIDI(0xB0, 0, 0x00);
-	talkMIDI(0xC0, PIANO_NUMBER, 0); //Set instrument number. 0xC0 is a 1 data byte command
+	talkMIDI(0xC0, currentInstrument, 0); //Set instrument number. 0xC0 is a 1 data byte command
 
 	// Do the same for channel 1
 	talkMIDI(0xB1, 0, 0x00);
-	talkMIDI(0xC1, PIANO_NUMBER, 0); //Set instrument number. 0xC0 is a 1 data byte command
+	talkMIDI(0xC1, currentInstrument, 0); //Set instrument number. 0xC0 is a 1 data byte command
 
 	checkRecordingPedal();
+	checkPlayButton();
 	//checkLoopingPedal();
 
-	/*if (isPlayingActivated()) {
-		isPlayingLoop = true;
-		currentTimeCounter = 0;
-		noteIndex = 0;
-	}
-
-	if (isPlayingStopped()) {
-		isPlayingLoop = false;
-	}*/
 	if (loopPedalMode == ACTIVE) {
-		//Serial.println("LOOP ACTIVE");
-		//Serial.println(currentTimeCounter);
 		if (!noteLoop.isEmpty() && 100* (noteLoop.peek().time / 100) == currentTimeCounter) {
 			noteIndex++;
 			Serial.print("NOTE HIT:");
@@ -184,9 +218,7 @@ void loop() {
 
 			NoteInstance note = noteLoop.pop();
 			noteLoop.push(note);
-			
-			
-			
+
 			Serial.print(note.note);
 			Serial.print(" : ");
 			Serial.println(note.mode);
@@ -196,13 +228,13 @@ void loop() {
 				delay(50);
 			}
 			else {
-				
+
 				Serial.println("TURN NOTE OFF");
 				noteOff(1, note.note, 60);
 				delay(50);
 			}
 		}
-		currentTimeCounter+= 100;
+		currentTimeCounter+= 50;
 	}
 
 	for (int i = 0; i < sizeof(SENSOR_PINS) / sizeof(int); i++) {
@@ -210,6 +242,7 @@ void loop() {
 			if (!isSensorOn[i]) {
 				Serial.println("Sensor on");
 				noteOn(0, SENSOR_NOTES[i], 60);
+				delay(50);
 				isSensorOn[i] = true;
 
 				if (recordPedalMode == ACTIVE) {
@@ -224,7 +257,7 @@ void loop() {
 				Serial.println("Sensor off");
 				noteOff(0, SENSOR_NOTES[i], 60);
 				isSensorOn[i] = false;
-
+				delay(50);
 				if (recordPedalMode == ACTIVE) {
 					NoteInstance noteInstance = {SENSOR_NOTES[i], millis() - recordTimeCounter, TURN_OFF};
 					noteLoop.push(noteInstance);
