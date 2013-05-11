@@ -103,8 +103,8 @@ struct Button {
 	long lastDebounceTime;
 };
 
-Button recordPedal = {53, LOW, LOW, 0};
-Button playButton = {52, LOW, LOW, 0};
+Button recordPedal = {16, LOW, LOW, 0};
+Button playButton = {15, LOW, LOW, 0};
 bool playToggle = false;
 
 void setup() {
@@ -128,7 +128,7 @@ void setup() {
 
 	//Set up pedals
 	pinMode(recordPedal.pin, INPUT);
-
+	pinMode(playButton.pin, INPUT);
 	strip.begin();
 
 	// Update LED contents, to start they are all 'off'
@@ -204,28 +204,36 @@ void checkRecordingPedal() {
 }
 
 void checkPlayButton() {
+	//Serial.println("CHECK PLAY BUTTON");
 	int reading = digitalRead(playButton.pin);
 
 	if (reading != playButton.lastState) {
+		//Serial.println("DIFFERENT STATE");
 		playButton.lastDebounceTime = millis();
 	} 
 
 	if ((millis() - playButton.lastDebounceTime) > DEBOUNCE_DELAY) {
+		//Serial.println("HEY");
 		if (playButton.state != reading && playButtonMode == INACTIVE) {
 			playButtonMode = ACTIVE;
+			
+		//Serial.println("IN THE RIGHT PLACE");
 		}
 		else if (playButton.state != reading && playButtonMode == ACTIVE){
 			playButtonMode = INACTIVE;
 			playToggle = !playToggle;
-
+			
+		//Serial.println("HERE");
 			if (playToggle) {
 				Serial.println("Playback started");
 				loopPedalMode = ACTIVE;
-				currentTimeCounter = 0;
+				currentTimeCounter = millis();
 				resetNoteLoop();
 				noteIndex = 0;
 			}
 			else {
+				
+		//Serial.println("IN THE RIGHT PLACE");
 				loopPedalMode = INACTIVE;
 				Serial.println("Playback stopped");
 			}
@@ -279,19 +287,19 @@ void loop() {
 	//checkLoopingPedal();
 
 	if (loopPedalMode == ACTIVE) {
-		if (!noteLoop.isEmpty() && 100* (noteLoop.peek().time / 100) == currentTimeCounter) {
+		if (!noteLoop.isEmpty() && millis() - currentTimeCounter > noteLoop.peek().time) {
 			noteIndex++;
 			Serial.print("NOTE HIT:");
 			if (noteIndex % noteLoop.count() == 0) {
 				Serial.println("RESTART POINT");
-				currentTimeCounter = 0;
+				currentTimeCounter = millis();
 			}
 			NoteInstance note = noteLoop.pop();
 			noteLoop.push(note);
 
-			Serial.print(note.note);
+			/*Serial.print(note.note);
 			Serial.print(" : ");
-			Serial.println(note.mode);
+			Serial.println(note.mode);*/
 			if (note.mode == TURN_ON) {
 				Serial.println("TURN NOTE ON");
 				noteOn(1, note.note, 60);
@@ -303,36 +311,32 @@ void loop() {
 				delay(50);
 			}
 		}
-		currentTimeCounter+= 50;
+		//currentTimeCounter+= 50;
 	}
 
 	for (int i = 0; i < sizeof(SENSOR_PINS) / sizeof(int); i++) {
 		RangeHeight height = range(sensors[i], i);
 		if ( height != INVALID){
 			if (!isSensorOn[i]) {
-				Serial.println("Sensor on");
+				//Serial.println("Sensor on");
 				currentNotes[i] = getNoteBySensorAndRange(i, height);
 
 				noteOn(0, currentNotes[i], 60);
 				delay(20);
 				isSensorOn[i] = true;
-				//strip.setPixelColor(i, Color(255, 0, 0));
-				Serial.println(strip.numPixels() - i -1);
-				Serial.println(LED_COLORS[strip.numPixels() - i -1]);
-				strip.setPixelColor(strip.numPixels() - i -1, LED_COLORS[strip.numPixels() - i -1]);
-				strip.show();
+				/*strip.setPixelColor(strip.numPixels() - i -1, LED_COLORS[strip.numPixels() - i -1]);
+				strip.show();*/
 				if (recordPedalMode == ACTIVE) {
 					NoteInstance noteInstance = {currentNotes[i], millis() - recordTimeCounter, TURN_ON};
 					noteLoop.push(noteInstance);
 				}
-				Serial.println(noteLoop.count());
+				//Serial.println(noteLoop.count());
 			}
 		}
 		else {
 			if (isSensorOn[i]) {
-				Serial.println("Sensor off");
-				strip.setPixelColor(strip.numPixels() - i - 1, Color(0,0,0));
-				strip.show();
+				/*strip.setPixelColor(strip.numPixels() - i - 1, Color(0,0,0));
+				strip.show();*/
 				noteOff(0, currentNotes[i], 60);
 				isSensorOn[i] = false;
 				delay(20);
