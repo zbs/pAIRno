@@ -7,6 +7,8 @@
 #include <SoftwareSerial.h>
 #include <DistanceGP2Y0A21YK.h>
 #include <QueueList.h>
+#include "SPI.h"
+#include "Adafruit_WS2801.h"
 
 enum NoteMode {
 	TURN_ON,
@@ -18,7 +20,10 @@ struct NoteInstance {
 	NoteMode mode;
 };
 
+uint8_t dataPin  = 30;    // Yellow wire on Adafruit Pixels
+uint8_t clockPin = 31;    // Green wire on Adafruit Pixels
 
+Adafruit_WS2801 strip = Adafruit_WS2801(13, dataPin, clockPin);
 
 SoftwareSerial mySerial(2, 3); // RX, TX
 
@@ -26,16 +31,16 @@ byte note = 0; //The MIDI note value to be played
 byte resetMIDI = 4; //Tied to VS1053 Reset line
 byte ledPin = 13; //MIDI traffic inidicator
 
-const int SENSOR_PINS[] = {A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11};
+//12 note corresponds to A0, and so forth
+const int SENSOR_PINS[] = {A0, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12};
 const int NUM_SENSORS = sizeof(SENSOR_PINS)/sizeof(int);
 DistanceGP2Y0A21YK sensors[sizeof(SENSOR_PINS)/sizeof(int)];
 
-boolean isSensorOn[] = {false, false, false};
+boolean isSensorOn[] = {false, false, false, false, false, false, false, false, false, false, false, false};
 
-const int MAX_READ_DISTANCE[] = {10, 15, 20};
+const int MAX_READ_DISTANCE[] = {1, 12, 16};
 
 // Middle C, D, and E
-
 struct PitchTrio {
 	int lowPitch;
 	int mediumPitch;
@@ -48,13 +53,13 @@ struct LightTrio {
 	int highLight;
 };
 
-const long LED_COLOR_LOW_PITCH[]={16711680, 65280, 255};
-const long LED_COLOR_MED_PITCH[]={15143680, 6332160, 4194527};
-const long LED_COLOR_HIGH_PITCH[]={14491904, 9269760 , 6750320};
+const uint32_t LED_COLORS[] = {Color(255, 0, 0), Color(0, 0, 255), Color(255, 128, 0), Color(255, 0, 127),
+							Color(255, 255, 0),	Color(0, 255, 0), Color(255, 0, 0), Color(0, 0, 255), Color(255, 255, 0),
+								Color(127, 0, 255), Color(0, 255, 0), Color(255, 0, 127)};
 
 const int SENSOR_NOTES_LOW_PITCH[] = {48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70};
-const int SENSOR_NOTES_MED_PITCH[]= {60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80, 82};
-const int SENSOR_NOTES_HIGH_PITCH[]= {72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92, 94};
+const int SENSOR_NOTES_MED_PITCH[]= {60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71};
+const int SENSOR_NOTES_HIGH_PITCH[]= {72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83};
 
 int currentNotes[NUM_SENSORS];
 
@@ -75,8 +80,6 @@ enum Instrument {
 	HARPSICHORD = 6,
 	BANJO = 105
 };
-
-
 
 const int FOURWAY_SWITCH_PINS[] = {42, 43, 44, 45};
 const Instrument FOURWAY_SWITCH_INTSTRUMENTS[] = {GRAND_PIANO, TENOR_SAX, HARPSICHORD, BANJO};
@@ -106,7 +109,7 @@ bool playToggle = false;
 
 void setup() {
 	Serial.begin(9600);
-	for (int i = 0; i < sizeof(SENSOR_NOTES) / sizeof(int); i++) {
+	for (int i = 0; i < sizeof(SENSOR_PINS) / sizeof(int); i++) {
 		sensors[i].begin(SENSOR_PINS[i]);
 	}
 
@@ -125,17 +128,37 @@ void setup() {
 
 	//Set up pedals
 	pinMode(recordPedal.pin, INPUT);
+
+	strip.begin();
+
+	// Update LED contents, to start they are all 'off'
+	strip.show();
 }
 
-RangeHeight range(DistanceGP2Y0A21YK sensor){
+uint32_t Color(byte r, byte g, byte b)
+{
+	uint32_t c;
+	c = r;
+	c <<= 8;
+	c |= g;
+	c <<= 8;
+	c |= b;
+	return c;
+}
+
+RangeHeight range(DistanceGP2Y0A21YK sensor, int pin){
 	int distance = sensor.getDistanceCentimeter();
 
+	/*if (pin == 8) {
+		Serial.println(distance);
+	}*/
 	for (int i = 0; i < sizeof(MAX_READ_DISTANCE)/sizeof(int); i++) {
 		if (distance < MAX_READ_DISTANCE[i]) {
+			//Serial.print("Pin ");Serial.print(pin);Serial.print(" at height "); Serial.println(distance);
 			return (RangeHeight)i;
 		}
 	}
-	
+
 	return INVALID;
 }
 
@@ -263,7 +286,6 @@ void loop() {
 				Serial.println("RESTART POINT");
 				currentTimeCounter = 0;
 			}
-
 			NoteInstance note = noteLoop.pop();
 			noteLoop.push(note);
 
@@ -285,15 +307,20 @@ void loop() {
 	}
 
 	for (int i = 0; i < sizeof(SENSOR_PINS) / sizeof(int); i++) {
-		RangeHeight height = range(sensors[i]);
+		RangeHeight height = range(sensors[i], i);
 		if ( height != INVALID){
 			if (!isSensorOn[i]) {
 				Serial.println("Sensor on");
 				currentNotes[i] = getNoteBySensorAndRange(i, height);
-				noteOn(0, currentNotes[i], 60);
-				delay(50);
-				isSensorOn[i] = true;
 
+				noteOn(0, currentNotes[i], 60);
+				delay(20);
+				isSensorOn[i] = true;
+				//strip.setPixelColor(i, Color(255, 0, 0));
+				Serial.println(strip.numPixels() - i -1);
+				Serial.println(LED_COLORS[strip.numPixels() - i -1]);
+				strip.setPixelColor(strip.numPixels() - i -1, LED_COLORS[strip.numPixels() - i -1]);
+				strip.show();
 				if (recordPedalMode == ACTIVE) {
 					NoteInstance noteInstance = {currentNotes[i], millis() - recordTimeCounter, TURN_ON};
 					noteLoop.push(noteInstance);
@@ -304,9 +331,11 @@ void loop() {
 		else {
 			if (isSensorOn[i]) {
 				Serial.println("Sensor off");
+				strip.setPixelColor(strip.numPixels() - i - 1, Color(0,0,0));
+				strip.show();
 				noteOff(0, currentNotes[i], 60);
 				isSensorOn[i] = false;
-				delay(50);
+				delay(20);
 				if (recordPedalMode == ACTIVE) {
 					NoteInstance noteInstance = {currentNotes[i], millis() - recordTimeCounter, TURN_OFF};
 					noteLoop.push(noteInstance);
