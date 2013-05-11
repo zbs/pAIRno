@@ -98,7 +98,7 @@ void setup() {
 
         //make sure all lights are off
          strip.begin();
-         strip.show();
+         strip.show();l
 }
 
 

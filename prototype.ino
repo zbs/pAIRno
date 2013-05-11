@@ -3,8 +3,7 @@
 - Incorporate instrument into noteinstance so that you can play different instruments across a recording
 
 */
-
-
+#include "types.h"
 #include <SoftwareSerial.h>
 #include <DistanceGP2Y0A21YK.h>
 #include <QueueList.h>
@@ -19,23 +18,45 @@ struct NoteInstance {
 	NoteMode mode;
 };
 
+
+
 SoftwareSerial mySerial(2, 3); // RX, TX
 
 byte note = 0; //The MIDI note value to be played
 byte resetMIDI = 4; //Tied to VS1053 Reset line
 byte ledPin = 13; //MIDI traffic inidicator
 
-const int SENSOR_PINS[] = {A0, A2};
+const int SENSOR_PINS[] = {A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11};
+const int NUM_SENSORS = sizeof(SENSOR_PINS)/sizeof(int);
 DistanceGP2Y0A21YK sensors[sizeof(SENSOR_PINS)/sizeof(int)];
 
 boolean isSensorOn[] = {false, false, false};
 
+const int MAX_READ_DISTANCE[] = {10, 15, 20};
+
 // Middle C, D, and E
-const int SENSOR_NOTES[] = {60, 62, 64};
 
+struct PitchTrio {
+	int lowPitch;
+	int mediumPitch;
+	int highPitch;
+};
 
-const int MAX_READ_DISTANCE = 18;
-const int MIN_READ_DISTANCE = 5;
+struct LightTrio {
+	int lowLight;
+	int mediumLight;
+	int highLight;
+};
+
+const long LED_COLOR_LOW_PITCH[]={16711680, 65280, 255};
+const long LED_COLOR_MED_PITCH[]={15143680, 6332160, 4194527};
+const long LED_COLOR_HIGH_PITCH[]={14491904, 9269760 , 6750320};
+
+const int SENSOR_NOTES_LOW_PITCH[] = {48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70};
+const int SENSOR_NOTES_MED_PITCH[]= {60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80, 82};
+const int SENSOR_NOTES_HIGH_PITCH[]= {72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92, 94};
+
+int currentNotes[NUM_SENSORS];
 
 QueueList<NoteInstance> noteLoop;
 QueueList<NoteInstance> bufferLoop;
@@ -54,6 +75,8 @@ enum Instrument {
 	HARPSICHORD = 6,
 	BANJO = 105
 };
+
+
 
 const int FOURWAY_SWITCH_PINS[] = {42, 43, 44, 45};
 const Instrument FOURWAY_SWITCH_INTSTRUMENTS[] = {GRAND_PIANO, TENOR_SAX, HARPSICHORD, BANJO};
@@ -104,17 +127,28 @@ void setup() {
 	pinMode(recordPedal.pin, INPUT);
 }
 
-boolean inRange(DistanceGP2Y0A21YK sensor){
+RangeHeight range(DistanceGP2Y0A21YK sensor){
 	int distance = sensor.getDistanceCentimeter();
-	if ( distance < MAX_READ_DISTANCE && distance > MIN_READ_DISTANCE) {
-		return true;
+
+	for (int i = 0; i < sizeof(MAX_READ_DISTANCE)/sizeof(int); i++) {
+		if (distance < MAX_READ_DISTANCE[i]) {
+			return (RangeHeight)i;
+		}
 	}
-	return false;
+	
+	return INVALID;
 }
 
 void clearNoteLoop(){
 	while (!noteLoop.isEmpty()) {
 		noteLoop.pop();
+	}
+}
+
+void resetNoteLoop(){
+	while (noteIndex % noteLoop.count() != 0){
+		noteLoop.push(noteLoop.pop());
+		noteIndex++;
 	}
 }
 
@@ -165,6 +199,7 @@ void checkPlayButton() {
 				Serial.println("Playback started");
 				loopPedalMode = ACTIVE;
 				currentTimeCounter = 0;
+				resetNoteLoop();
 				noteIndex = 0;
 			}
 			else {
@@ -190,6 +225,19 @@ void checkFourWaySwitch(){
 			currentInstrument = FOURWAY_SWITCH_INTSTRUMENTS[i];
 			return;
 		}
+	}
+}
+
+int getNoteBySensorAndRange(int sensor, RangeHeight height){
+	switch (height) {
+	case LOW_HEIGHT:
+		return SENSOR_NOTES_LOW_PITCH[sensor];
+	case MEDIUM_HEIGHT:
+		return SENSOR_NOTES_MED_PITCH[sensor];
+	case TALL_HEIGHT:
+		return SENSOR_NOTES_HIGH_PITCH[sensor];
+	case INVALID:
+		return -1;
 	}
 }
 
@@ -228,7 +276,6 @@ void loop() {
 				delay(50);
 			}
 			else {
-
 				Serial.println("TURN NOTE OFF");
 				noteOff(1, note.note, 60);
 				delay(50);
@@ -238,15 +285,17 @@ void loop() {
 	}
 
 	for (int i = 0; i < sizeof(SENSOR_PINS) / sizeof(int); i++) {
-		if (inRange(sensors[i])){
+		RangeHeight height = range(sensors[i]);
+		if ( height != INVALID){
 			if (!isSensorOn[i]) {
 				Serial.println("Sensor on");
-				noteOn(0, SENSOR_NOTES[i], 60);
+				currentNotes[i] = getNoteBySensorAndRange(i, height);
+				noteOn(0, currentNotes[i], 60);
 				delay(50);
 				isSensorOn[i] = true;
 
 				if (recordPedalMode == ACTIVE) {
-					NoteInstance noteInstance = {SENSOR_NOTES[i], millis() - recordTimeCounter, TURN_ON};
+					NoteInstance noteInstance = {currentNotes[i], millis() - recordTimeCounter, TURN_ON};
 					noteLoop.push(noteInstance);
 				}
 				Serial.println(noteLoop.count());
@@ -255,11 +304,11 @@ void loop() {
 		else {
 			if (isSensorOn[i]) {
 				Serial.println("Sensor off");
-				noteOff(0, SENSOR_NOTES[i], 60);
+				noteOff(0, currentNotes[i], 60);
 				isSensorOn[i] = false;
 				delay(50);
 				if (recordPedalMode == ACTIVE) {
-					NoteInstance noteInstance = {SENSOR_NOTES[i], millis() - recordTimeCounter, TURN_OFF};
+					NoteInstance noteInstance = {currentNotes[i], millis() - recordTimeCounter, TURN_OFF};
 					noteLoop.push(noteInstance);
 				}
 			}
