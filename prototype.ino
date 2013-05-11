@@ -193,7 +193,7 @@ void checkRecordingPedal() {
 		else if (recordPedal.state != reading && recordPedalMode == ACTIVE){
 			Serial.println("Stop recording");
 			recordPedalMode = INACTIVE;
-
+			noteIndex = 0;
 			// Playback code
 
 			//printQueue();
@@ -303,12 +303,12 @@ void loop() {
 			if (note.mode == TURN_ON) {
 				Serial.println("TURN NOTE ON");
 				noteOn(1, note.note, 60);
-				delay(50);
+				delay(20);
 			}
 			else {
 				Serial.println("TURN NOTE OFF");
 				noteOff(1, note.note, 60);
-				delay(50);
+				delay(20);
 			}
 		}
 		//currentTimeCounter+= 50;
